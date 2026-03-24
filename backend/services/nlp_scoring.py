@@ -51,8 +51,7 @@ def transcribe_audio_with_groq(media_url: str) -> str:
     print("[🎤] Sending Audio to Groq Whisper...")
     
     try:
-        # CRITICAL FIX: Authenticate with Twilio so they actually give us the audio file 
-        # instead of a 401 Unauthorized XML file.
+        # CRITICAL FIX: Authenticate with Twilio
         twilio_sid = os.getenv("TWILIO_ACCOUNT_SID")
         twilio_token = os.getenv("TWILIO_AUTH_TOKEN")
         
@@ -129,7 +128,7 @@ def analyze_distress_signal(text: str, lat: str = 'None', lon: str = 'None', med
             "Content-Type": "application/json"
         }
         payload = {
-            "model": "llama-3.3-70b-versatile", # CRITICAL FIX: The newest, fully-supported Groq model
+            "model": "llama-3.3-70b-versatile",
             "messages": [{"role": "user", "content": system_prompt}],
             "response_format": {"type": "json_object"} 
         }
@@ -174,4 +173,86 @@ def analyze_distress_signal(text: str, lat: str = 'None', lon: str = 'None', med
             "estimated_people": people_count, 
             "osint_context": f"OSINT Heuristic: API confirms {cond} in {city}. Social Intel active.",
             "transcribed_text": actual_text
+        }
+
+def fetch_global_news(query: str) -> str:
+    """Real OSINT: Scrape global news for macro-threats (War, Disasters)."""
+    api_key = os.getenv("NEWS_API_KEY")
+    if not api_key or query == "Unknown":
+        return "News OSINT offline."
+    
+    try:
+        url = f"https://newsapi.org/v2/everything?q={query} AND (war OR strike OR earthquake OR flood OR emergency OR crisis)&language=en&sortBy=publishedAt&pageSize=3&apiKey={api_key}"
+        res = requests.get(url, timeout=4).json()
+        
+        if res.get("status") == "ok" and res.get("articles"):
+            headlines = [f"[{a['source']['name']}] {a['title']}" for a in res['articles']]
+            return " | ".join(headlines)
+        return f"No major critical news alerts found for {query} in the last 24 hours."
+    except Exception as e:
+        print(f"News API Error: {e}")
+        return "News API timeout."
+
+def macro_osint_scan(region_name: str, lat: str, lon: str) -> dict:
+    """
+    The 'God's Eye' Scanner: Cross-references News, Reddit, and Weather
+    to evaluate the real-time threat level of an entire country/city.
+    """
+    print(f"[🌍] Initiating Global Macro-Scan for: {region_name}")
+    
+    # 1. Gather the Triad of OSINT
+    weather_data = fetch_live_weather(lat, lon)
+    social_data = fetch_social_media_intel(region_name)
+    news_data = fetch_global_news(region_name)
+
+    # 2. Feed it to Groq Llama-3.3-70b
+    system_prompt = f"""
+    You are OmniGuard Command, a strategic military and disaster intelligence AI.
+    Evaluate the current live threat level for the region: "{region_name}".
+
+    Live Weather API: {weather_data}
+    Social Media API (Reddit): {social_data}
+    Live Global News API: {news_data}
+
+    Determine if there is an active geopolitical conflict (e.g., war, missile strikes), natural disaster, or extreme weather event happening RIGHT NOW based ONLY on this data.
+
+    Output ONLY valid JSON matching this exact structure:
+    {{
+        "threat_level": "DEFCON 1", "DEFCON 3", or "CLEAR",
+        "primary_hazard": "<e.g., 'Geopolitical Conflict', 'Severe Flooding', 'None'>",
+        "confidence_score": "<percentage string, e.g. '95%'>",
+        "executive_summary": "<A harsh, military-style 2-sentence summary of the news and social data>",
+        "extracted_keywords": ["<string>", "<string>"]
+    }}
+    """
+    
+    try:
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        headers = {
+            "Authorization": f"Bearer {GROQ_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "model": "llama-3.3-70b-versatile",
+            "messages": [{"role": "user", "content": system_prompt}],
+            "response_format": {"type": "json_object"} 
+        }
+        
+        response = requests.post(url, headers=headers, json=payload)
+        res_data = response.json()
+        
+        if 'error' in res_data:
+            raise Exception(res_data['error']['message'])
+            
+        json_str = res_data['choices'][0]['message']['content']
+        return json.loads(json_str)
+        
+    except Exception as e:
+        print(f"Macro Scan Error: {e}")
+        return {
+            "threat_level": "UNKNOWN",
+            "primary_hazard": "System Degradation",
+            "confidence_score": "0%",
+            "executive_summary": "OSINT APIs failed to return data. Manual reconnaissance required.",
+            "extracted_keywords": ["error"]
         }

@@ -7,15 +7,13 @@ from pydantic import BaseModel
 from typing import List
 from dotenv import load_dotenv
 
-# Load environment variables (your App Password)
 load_dotenv()
 
 router = APIRouter()
 
-# Define the expected JSON payload from the frontend
 class AlertPayload(BaseModel):
     recipients: List[str]
-    severity: str  # e.g., "CRITICAL", "WARNING", "INFO"
+    severity: str 
     location: str
     message: str
     instructions: str
@@ -27,7 +25,6 @@ def send_smtp_email(payload: AlertPayload):
     if not sender_email or not app_password:
         raise ValueError("Server configuration error: Missing SMTP credentials.")
 
-    # Format the email to look official and urgent
     html_content = f"""
     <html>
         <body style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 2px solid #dc2626; border-radius: 8px; overflow: hidden;">
@@ -60,7 +57,6 @@ def send_smtp_email(payload: AlertPayload):
     msg.attach(MIMEText(html_content, "html"))
 
     try:
-        # Connect to Google's SMTP server
         server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
         server.login(sender_email, app_password)
         server.sendmail(sender_email, payload.recipients, msg.as_string())
@@ -71,12 +67,7 @@ def send_smtp_email(payload: AlertPayload):
 
 @router.post("/dispatch")
 async def dispatch_alert(payload: AlertPayload, background_tasks: BackgroundTasks):
-    """
-    Triggers an emergency email blast. 
-    Uses BackgroundTasks so the API responds instantly, preventing latency.
-    """
     try:
-        # We pass the email function to a background task so the frontend doesn't hang
         background_tasks.add_task(send_smtp_email, payload)
         return {"status": "success", "message": f"Alert queued for {len(payload.recipients)} recipients."}
     except Exception as e:

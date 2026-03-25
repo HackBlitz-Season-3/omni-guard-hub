@@ -1,53 +1,37 @@
 "use client";
 
-import { MapContainer, TileLayer, Marker, Popup, Circle, useMapEvents } from 'react-leaflet';
+import { MapContainer, TileLayer, Marker, Popup, useMapEvents } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
-// Fix Next.js Leaflet icon bug
-const defaultIcon = L.icon({
-  iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-  shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png',
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
+// Red icon for User SOS Webhooks
+const tacticalIcon = L.divIcon({
+  className: 'custom-div-icon',
+  html: `<div style="background-color:#ff3e3e; width:12px; height:12px; border-radius:50%; border:2px solid white; box-shadow: 0 0 10px #ff3e3e;"></div>`,
+  iconSize: [12, 12],
+  iconAnchor: [6, 6]
 });
 
-const criticalIcon = L.icon({
-  iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
-  shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
+// Orange/Yellow icon for Macro OSINT Disasters
+const osintIcon = L.divIcon({
+  className: 'custom-div-icon',
+  html: `<div style="background-color:#f97316; width:16px; height:16px; border-radius:50%; border:2px solid white; box-shadow: 0 0 15px #f97316;"></div>`,
+  iconSize: [16, 16],
+  iconAnchor: [8, 8]
 });
 
-// Helper component to capture map clicks
 function MapClickInterceptor({ onMapClick }: { onMapClick?: (lat: number, lng: number) => void }) {
   useMapEvents({
-    click(e) {
-      if (onMapClick) onMapClick(e.latlng.lat, e.latlng.lng);
-    }
+    click(e) { if (onMapClick) onMapClick(e.latlng.lat, e.latlng.lng); }
   });
   return null;
 }
 
-interface LiveMapProps {
-  signals: any[];
-  isPublicView?: boolean;
-  onMapClick?: (lat: number, lng: number) => void;
-  macroScan?: { lat: number; lng: number; threatLevel: string } | null;
-}
-
-export default function LiveMap({ signals, isPublicView = false, onMapClick, macroScan }: LiveMapProps) {
-  const centerPosition: [number, number] = [21.1458, 79.0882]; 
-
-  const safeZones = [
-    { id: 1, lat: 21.1500, lng: 79.0900, radius: 400, name: "Govt Hospital Relief Camp" },
-    { id: 2, lat: 21.1350, lng: 79.0800, radius: 600, name: "High-Ground School Shelter" }
-  ];
-
+export default function LiveMap({ signals, onMapClick, macroScan }: any) {
   const parseLocation = (locStr: string): [number, number] | null => {
-    if (!locStr || locStr.includes("Not Provided")) return null;
-    const matches = locStr.match(/([\d.-]+)/g);
+    if (!locStr || typeof locStr !== 'string' || locStr.includes("Not Provided")) return null;
+    const cleanStr = locStr.replace(/Lat:/g, '').replace(/Lng:/g, '');
+    const matches = cleanStr.match(/([-+]?[\d.]+)/g);
     if (matches && matches.length >= 2) {
       return [parseFloat(matches[0]), parseFloat(matches[1])];
     }
@@ -55,67 +39,41 @@ export default function LiveMap({ signals, isPublicView = false, onMapClick, mac
   };
 
   return (
-    <div className="h-[400px] w-full rounded-xl overflow-hidden border-2 border-gray-700 z-0 relative cursor-crosshair">
-      <MapContainer 
-        center={centerPosition} 
-        zoom={3} // Zoomed out to see the world for global scanning
-        scrollWheelZoom={false}
-        style={{ height: '100%', width: '100%' }}
-      >
+    <div className="h-[500px] w-full border border-[#00ffd0]/40 rounded-xl overflow-hidden shadow-[0_0_20px_rgba(0,255,208,0.15)] relative z-0">
+      <MapContainer center={[21.1458, 79.0882]} zoom={4} scrollWheelZoom={true} className="h-full w-full bg-[#050505]">
         <MapClickInterceptor onMapClick={onMapClick} />
-        
-        <TileLayer
+        <TileLayer 
           url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
-          attribution='&copy; CARTO'
+          attribution='&copy; OMNI-GUARD INTEL'
         />
 
-        {/* Render Global Macro Scan Radar Zone */}
-        {macroScan && (
-          <Circle 
-            center={[macroScan.lat, macroScan.lng]} 
-            radius={250000} // 250km radius for a massive regional scan
-            pathOptions={{ 
-              color: macroScan.threatLevel === 'DEFCON 1' ? '#ef4444' : macroScan.threatLevel === 'DEFCON 3' ? '#f97316' : '#10b981', 
-              fillColor: macroScan.threatLevel === 'DEFCON 1' ? '#ef4444' : macroScan.threatLevel === 'DEFCON 3' ? '#f97316' : '#10b981', 
-              fillOpacity: 0.3 
-            }}
-          >
-            <Popup>
-              <div className="text-gray-900 font-sans">
-                <strong>📡 God's Eye Radar</strong><br/>
-                Threat Level: {macroScan.threatLevel}
-              </div>
-            </Popup>
-          </Circle>
-        )}
-
-        {/* Render Safe Zones */}
-        {safeZones.map(zone => (
-          <Circle key={zone.id} center={[zone.lat, zone.lng]} radius={zone.radius} pathOptions={{ color: 'green', fillColor: 'green', fillOpacity: 0.4 }}>
-            <Popup><strong>✅ {zone.name}</strong><br/>Verified Safe Zone</Popup>
-          </Circle>
-        ))}
-
-        {/* Render Distress Signals */}
-        {signals.map((signal) => {
-          const coords = parseLocation(signal.location_str);
-          if (!coords) return null;
-
+        {/* PLOT 1: OSINT MACRO DISASTERS (Orange) */}
+        {macroScan && macroScan.incidents && macroScan.incidents.map((incident: any, idx: number) => {
+          if (!incident.approx_lat || !incident.approx_lng) return null;
           return (
-            <Marker key={signal.id} position={coords} icon={signal.severity === 'CRITICAL' ? criticalIcon : defaultIcon}>
-              <Popup>
-                <div className="text-gray-900 font-sans">
-                  <h3 className="font-bold text-red-600 mb-1">{signal.severity} ALERT</h3>
-                  {!isPublicView ? (
-                    <>
-                      <p className="text-xs italic mb-2">"{signal.raw_message}"</p>
-                      <div className="bg-gray-100 p-2 rounded text-xs border border-gray-300">
-                        <span className="font-bold text-blue-600">OSINT Truth Score: {signal.truth_verification_score}</span>
-                      </div>
-                    </>
-                  ) : (
-                    <p className="text-xs text-gray-600">Active Rescue Operation Area. AVOID.</p>
-                  )}
+            <Marker key={`macro-${idx}`} position={[incident.approx_lat, incident.approx_lng]} icon={osintIcon}>
+              <Popup className="tactical-popup">
+                <div className="bg-[#050505] text-[#f97316] p-2 border border-[#f97316]/50 font-mono text-[10px] w-48">
+                  <p className="font-bold border-b border-[#f97316]/20 mb-1 pb-1">⚠️ OSINT: {incident.type}</p>
+                  <p className="text-white font-bold">{incident.location}</p>
+                  <p className="mt-1">Dead: {incident.dead} | Inj: {incident.injured}</p>
+                </div>
+              </Popup>
+            </Marker>
+          );
+        })}
+
+        {/* PLOT 2: INDIVIDUAL SOS SIGNALS (Red) */}
+        {signals.map((signal: any) => {
+          const coords = parseLocation(signal.location_str);
+          if (!coords) return null; 
+          
+          return (
+            <Marker key={signal.id} position={coords} icon={tacticalIcon}>
+              <Popup className="tactical-popup">
+                <div className="bg-[#050505] text-[#00ffd0] p-2 border border-[#00ffd0]/50 font-mono text-[10px]">
+                  <p className="font-bold border-b border-[#00ffd0]/20 mb-1 pb-1">SIGNAL_ID: {(signal.hashed_id || "Unknown").substring(0,8)}</p>
+                  <p className="italic">"{signal.raw_message || "No data"}"</p>
                 </div>
               </Popup>
             </Marker>

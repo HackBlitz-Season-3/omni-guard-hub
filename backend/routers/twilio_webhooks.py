@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Request, BackgroundTasks, Response
-from services.nlp_scoring import analyze_distress_signal
+from services.nlp_scoring import analyze_distress_signal, transcribe_audio_with_groq
 from routers.email_alerts import send_smtp_email, AlertPayload
 from supabase import create_client, Client
 from twilio.twiml.messaging_response import MessagingResponse
@@ -12,8 +12,6 @@ import uuid
 load_dotenv()
 
 router = APIRouter()
-
-# Initialize Supabase connection
 supabase_url = os.getenv("SUPABASE_URL")
 supabase_key = os.getenv("SUPABASE_SERVICE_KEY")
 supabase: Client = create_client(supabase_url, supabase_key)
@@ -32,105 +30,138 @@ async def handle_whatsapp_webhook(request: Request, background_tasks: Background
     latitude = parsed_data.get('Latitude', ['None'])[0]
     longitude = parsed_data.get('Longitude', ['None'])[0]
 
+    hashed_id = f"Victim-***{sender_number[-4:]}" if len(sender_number) >= 4 else "Victim-Unknown"
+
     has_location = latitude != 'None'
     has_audio = num_media > 0 and 'audio' in media_type
-    has_text = len(incoming_msg) > 0
+    
+    # CRITICAL FIX: Ignore hidden Google Maps links sent by WhatsApp when dropping a pin
+    has_meaningful_text = len(incoming_msg) > 3 and "google.com/maps" not in incoming_msg and "maps.apple.com" not in incoming_msg
 
-    reply_text = ""
-    run_full_pipeline = False
+    provided_description = has_audio or has_meaningful_text
 
-    # CONVERSATIONAL LOGIC
-    if (has_audio or has_text) and not has_location:
-        reply_text = "⚠️ Audio Received & Transcribed. We MUST have your exact coordinates. Please tap the '+' icon and send your 'Live Location' immediately."
-        run_full_pipeline = True
+    try:
+        # 1. FETCH STATE
+        # CRITICAL FIX: ONLY look for active, INCOMPLETE reports for this user to prevent merging with old emergencies.
+        existing = supabase.table("distress_signals").select("*").eq("hashed_id", hashed_id).eq("status", "INCOMPLETE").order("created_at", desc=True).limit(1).execute()
+        
+        merged_text = incoming_msg
+        merged_lat = latitude
+        merged_lon = longitude
+        
+        # Immediately transcribe audio if present
+        if has_audio and media_url:
+            transcribed = transcribe_audio_with_groq(media_url)
+            merged_text = f"🎙️ {transcribed}"
+            provided_description = True
 
-    elif has_location and not (has_audio or has_text):
-        reply_text = "📍 Coordinates Locked. NDRF Rapid Response Team has been dispatched to your exact location. ETA 12 mins. Stay high and remain visible."
-        run_full_pipeline = True
-        incoming_msg = "Location ping received. Waiting for audio intelligence."
-        media_url = None
+        # Merge with existing INCOMPLETE DB record if one exists
+        if existing.data:
+            record = existing.data[0]
+            
+            # If incoming is JUST description, retrieve the old location
+            if provided_description and not has_location:
+                if record['location_str'] and record['location_str'] != "Location Pending":
+                    parts = record['location_str'].replace("Lat:", "").replace("Lng:", "").split(",")
+                    if len(parts) == 2:
+                        merged_lat, merged_lon = parts[0].strip(), parts[1].strip()
+                        has_location = True
+                        
+            # If incoming is JUST location, retrieve the old description
+            if has_location and not provided_description:
+                if record['raw_message'] and record['raw_message'] != "Awaiting Voice Note...":
+                    merged_text = record['raw_message']
+                    provided_description = True
 
-    elif has_location and (has_audio or has_text):
-        reply_text = "🚨 SOS Verified. Coordinates and Audio Intelligence locked. NDRF units are en route."
-        run_full_pipeline = True
-    else:
-        reply_text = "OmniGuard System: Please send a voice note detailing your emergency AND share your live location."
+        new_location_str = f"{merged_lat}, {merged_lon}" if has_location else "Location Pending"
 
-    # --- STATEFUL PIPELINE EXECUTION ---
-    if run_full_pipeline:
-        ai_analysis = analyze_distress_signal(incoming_msg, latitude, longitude, media_url)
+        # 2. DECIDE ACTION BASED ON COMPLETENESS
+        if provided_description and not has_location:
+            reply_text = "⚠️ Audio Received & Transcribed. We MUST have your exact coordinates. Please tap the '+' icon and send your 'Live Location' immediately."
+            db_payload = {
+                "raw_message": merged_text,
+                "location_str": "Location Pending",
+                "severity": "INFO",
+                "urgency_score": 0,
+                "truth_verification_score": "Pending",
+                "osint_context": "Awaiting Location Data...",
+                "event_type": "Pending",
+                "status": "INCOMPLETE" # Keep it incomplete
+            }
 
-        hashed_id = f"Victim-***{sender_number[-4:]}" if len(sender_number) >= 4 else "Victim-Unknown"
-        new_location_str = f"{latitude}, {longitude}" if has_location else "Location Pending"
-        new_message_str = f"🎙️ {ai_analysis['transcribed_text']}" if has_audio else incoming_msg
+        elif has_location and not provided_description:
+            reply_text = f"📍 Coordinates Locked: {merged_lat}, {merged_lon}. Please send a voice note describing the emergency so we can verify the threat."
+            db_payload = {
+                "raw_message": "Awaiting Voice Note...",
+                "location_str": new_location_str,
+                "severity": "INFO",
+                "urgency_score": 0,
+                "truth_verification_score": "Pending",
+                "osint_context": "Awaiting Audio Data...",
+                "event_type": "Pending",
+                "status": "INCOMPLETE" # Keep it incomplete
+            }
 
-        try:
-            # 1. Check if this victim already has an active rescue signal
-            existing = supabase.table("distress_signals").select("*").eq("hashed_id", hashed_id).eq("status", "PENDING_RESCUE").order("created_at", desc=True).limit(1).execute()
+        elif provided_description and has_location:
+            # WE HAVE BOTH! Trigger the heavy AI Triage
+            ai_analysis = analyze_distress_signal(merged_text, merged_lat, merged_lon, media_url=None)
+            
+            truth_score = ai_analysis.get('truth_verification_score', '0%')
+            is_disaster = ai_analysis.get('is_natural_disaster', True)
 
-            if existing.data:
-                # 2. MERGE LOGIC: Update the existing row instead of creating a second one
-                record = existing.data[0]
-                final_loc = new_location_str if has_location else record['location_str']
-                
-                # Keep the original voice text if this webhook is just a location ping
-                final_msg = record['raw_message'] if (has_location and not has_audio and not has_text) else new_message_str
-
-                supabase.table("distress_signals").update({
-                    "raw_message": final_msg,
-                    "location_str": final_loc,
-                    "severity": ai_analysis['severity'],
-                    "urgency_score": ai_analysis['urgency_score'],
-                    "truth_verification_score": ai_analysis['truth_verification_score'],
-                    "extracted_flags": ai_analysis['extracted_flags'],
-                    "estimated_people": ai_analysis['estimated_people']
-                }).eq("id", record['id']).execute()
-                print(f"[✅ DB] Successfully merged audio and location for {hashed_id}")
-
-                # Trigger Email only if it just hit CRITICAL + Location received
-                if ai_analysis['severity'] == "CRITICAL" and has_location and record['location_str'] == "Location Pending":
-                    alert_payload = AlertPayload(
-                        recipients=["shivarkarvedant@gmail.com"],
-                        severity="CRITICAL",
-                        location=final_loc,
-                        message=f"Merged Alert: '{final_msg}'",
-                        instructions="Deploy NDRF immediately."
-                    )
-                    background_tasks.add_task(send_smtp_email, alert_payload)
-
+            # Formulate final WhatsApp reply
+            if not is_disaster or truth_score == "0%":
+                reply_text = f"⚠️ Alert rejected by OmniGuard OSINT. Truth Score: {truth_score}. Coordinates: {merged_lat}, {merged_lon}. Please contact local authorities."
             else:
-                # 3. No active record exists, INSERT a new one
-                db_payload = {
-                    "hashed_id": hashed_id,
-                    "raw_message": new_message_str,
-                    "severity": ai_analysis['severity'],
-                    "urgency_score": ai_analysis['urgency_score'],
-                    "truth_verification_score": ai_analysis['truth_verification_score'],
-                    "extracted_flags": ai_analysis['extracted_flags'],
-                    "estimated_people": ai_analysis['estimated_people'],
-                    "location_str": new_location_str,
-                    "status": "PENDING_RESCUE"
-                }
+                reply_text = f"🚨 SOS Verified. Coordinates Locked: {merged_lat}, {merged_lon}. OSINT Truth Verification: {truth_score}. NDRF units are dispatched."
+
+            db_payload = {
+                "raw_message": merged_text,
+                "severity": ai_analysis['severity'],
+                "urgency_score": ai_analysis['urgency_score'],
+                "truth_verification_score": truth_score,
+                "extracted_flags": ai_analysis['extracted_flags'],
+                "estimated_people": ai_analysis['estimated_people'],
+                "location_str": new_location_str,
+                "event_type": ai_analysis.get('event_type', 'Unknown'),
+                "is_natural_disaster": is_disaster,
+                "osint_context": ai_analysis.get('osint_context', ''),
+                "status": "PENDING_RESCUE" # Mark as Complete!
+            }
+
+            # Trigger Email Alert
+            if ai_analysis['severity'] == "CRITICAL" and is_disaster and truth_score != "0%":
+                alert_payload = AlertPayload(
+                    recipients=["shivarkarvedant@gmail.com"],
+                    severity="CRITICAL",
+                    location=new_location_str,
+                    message=f"Intercepted Alert: '{merged_text}'\nOSINT Truth Score: {truth_score}",
+                    instructions=f"Deploy NDRF immediately. OSINT Context: {ai_analysis.get('osint_context', '')}"
+                )
+                background_tasks.add_task(send_smtp_email, alert_payload)
+        else:
+            reply_text = "OmniGuard System Error. Please send a voice note AND share your live location."
+            db_payload = None
+
+        # 4. DATABASE UPSERT
+        if db_payload:
+            if existing.data:
+                # Update the INCOMPLETE record to become PENDING_RESCUE
+                supabase.table("distress_signals").update(db_payload).eq("id", existing.data[0]['id']).execute()
+            else:
+                # Create a NEW INCOMPLETE record
+                db_payload["hashed_id"] = hashed_id
                 supabase.table("distress_signals").insert(db_payload).execute()
-                print(f"[✅ DB] Inserted new signal for {hashed_id}")
 
-                if ai_analysis['severity'] == "CRITICAL" and has_location:
-                    alert_payload = AlertPayload(
-                        recipients=["shivarkarvedant@gmail.com"],
-                        severity="CRITICAL",
-                        location=new_location_str,
-                        message=f"Intercepted Alert: '{new_message_str}'",
-                        instructions="Deploy NDRF immediately."
-                    )
-                    background_tasks.add_task(send_smtp_email, alert_payload)
+    except Exception as e:
+        print(f"[❌ DB ERROR] {e}")
+        reply_text = "OmniGuard System Error. Please retry."
 
-        except Exception as e:
-            print(f"[❌ DB ERROR] {e}")
-
-    # Reply to WhatsApp
     twiml = MessagingResponse()
     twiml.message(reply_text)
     return Response(content=str(twiml), media_type="application/xml")
+
+# --------- KEEP WEB AND SIGNALS ENDPOINTS BELOW -----------
 
 @router.get("/signals")
 async def get_all_signals():
@@ -150,10 +181,10 @@ class WebSignalPayload(BaseModel):
 async def handle_web_submission(payload: WebSignalPayload, background_tasks: BackgroundTasks):
     ai_analysis = analyze_distress_signal(payload.message, payload.latitude, payload.longitude)
     hashed_id = f"Web-***{str(uuid.uuid4())[:4]}"
-    location_str = f"Lat: {payload.latitude}, Lng: {payload.longitude}"
-
+    location_str = f"{payload.latitude}, {payload.longitude}"
+    
     try:
-        db_payload = {
+        supabase.table("distress_signals").insert({
             "hashed_id": hashed_id,
             "raw_message": payload.message,
             "severity": ai_analysis['severity'],
@@ -162,20 +193,11 @@ async def handle_web_submission(payload: WebSignalPayload, background_tasks: Bac
             "extracted_flags": ai_analysis['extracted_flags'],
             "estimated_people": ai_analysis['estimated_people'],
             "location_str": location_str,
-            "status": "PENDING_RESCUE"
-        }
-        supabase.table("distress_signals").insert(db_payload).execute()
+            "status": "PENDING_RESCUE",
+            "osint_context": ai_analysis.get('osint_context', ''),
+            "event_type": ai_analysis.get('event_type', 'Unknown'),
+            "is_natural_disaster": ai_analysis.get('is_natural_disaster', True)
+        }).execute()
     except Exception as e:
         print(f"[DB ERROR] {e}")
-
-    if ai_analysis['severity'] == "CRITICAL":
-        alert_payload = AlertPayload(
-            recipients=["shivarkarvedant@gmail.com"],
-            severity="CRITICAL",
-            location=location_str,
-            message=f"Intercepted Web Report: '{payload.message}'.",
-            instructions="Deploy nearest rescue unit immediately."
-        )
-        background_tasks.add_task(send_smtp_email, alert_payload)
-
     return {"status": "success"}

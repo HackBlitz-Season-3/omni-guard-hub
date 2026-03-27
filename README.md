@@ -1,6 +1,6 @@
 # 🛡️ OmniGuard Fusion Hub
 ### **Headless Disaster Intelligence & Triage Engine**
-**Developed by Team 7** | *Lead Engineer: Vedant Shivarkar*
+**Developed by Team 7** | *Lead Engineer: Vedant Shivarkar* link >> https://www.linkedin.com/in/vedant-shivarkar-9539ba249/ 
 
 ---
 

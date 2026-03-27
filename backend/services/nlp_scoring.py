@@ -186,22 +186,26 @@ def macro_osint_scan(region_name: str, lat: str, lon: str) -> dict:
     CRITICAL INSTRUCTION FOR COMPREHENSIVE REPORTING:
     1. You MUST ONLY report acute NATURAL DISASTERS (e.g., floods, earthquakes, cyclones, landslides, tsunamis).
     2. STRICTLY IGNORE economic, political, or public health news.
-    3. DEMO OVERRIDE: If the News Data is empty or lacks natural disasters, you MUST simulate active threat intel to ensure the system is operational. Populate the array with EXACTLY 5 TO 6 highly realistic, diverse major natural disasters currently prone to various parts of the {region_name} region (e.g., "Flash Floods in Assam", "Severe Landslides in Uttarakhand", "Cyclonic Storm in Odisha", "Heatwave in Rajasthan", "Earthquake in Delhi", "Cloudburst in Sikkim"). NEVER return an empty array.
+    3. DEMO OVERRIDE: If the News Data is empty or lacks natural disasters, you MUST simulate active threat intel using EXACTLY the following 4 specific, highly-realistic scenarios. Do not invent others.
+       - Scenario 1: North Sikkim (Chungthang–Lachen). Ongoing landslides triggered by heavy rainfall. Tourists and vehicles stranded, connectivity disrupted.
+       - Scenario 2: Jammu & Kashmir (Sinthan Top / Kishtwar region). Landslide emergency. ~238 residents evacuated, continuing instability risk in hills. Deaths reported.
+       - Scenario 3: Uttarakhand & Himachal. Himalayan glacial flood risk. Active monitoring by NDMA of 189 high-risk lakes due to rising melt danger.
+       - Scenario 4: Northeast Hills. Heavy rain-triggered slides.
     
     CASUALTY & GEOLOCATION RULE:
-    1. Synthesize realistic casualty estimates. 
-    2. Provide highly accurate 'approx_lat' and 'approx_lng' coordinates for WHERE this incident is happening in India so we can plot Red Zones on a GIS map. Make sure they are spread out geographically.
+    1. Synthesize realistic casualty/trapped estimates based on the prompt descriptions above. 
+    2. Provide highly accurate 'approx_lat' and 'approx_lng' coordinates for WHERE these exact incidents are happening in India so we can plot Red Zones on a GIS map.
 
     Output ONLY valid JSON matching this exact structure:
     {{
-        "threat_level": "DEFCON 1", "DEFCON 3", or "CLEAR",
-        "primary_hazard": "<Primary Natural Disaster>",
+        "threat_level": "DEFCON 2",
+        "primary_hazard": "Multiple Cascading Natural Disasters",
         "confidence_score": "98%",
-        "executive_summary": "A harsh 2-sentence summary of the active natural disasters.",
+        "executive_summary": "Critical alerts active: North Sikkim landslides, J&K slope instability, and Himalayan glacial flood risks.",
         "active_incidents": [
             {{
-                "location": "<Exact area, e.g., Guwahati, Assam>",
-                "type": "<e.g., Severe Flood>",
+                "location": "<Exact area, e.g., Chungthang-Lachen, North Sikkim>",
+                "type": "<e.g., Severe Landslide>",
                 "approx_lat": <float coordinate>,
                 "approx_lng": <float coordinate>,
                 "dead": <integer>,

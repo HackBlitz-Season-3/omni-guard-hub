@@ -8,7 +8,7 @@ import SignalTacticalCard from '@/components/SignalTacticalCard';
 
 const LiveMap = dynamic(() => import('@/components/LiveMap'), { 
   ssr: false, 
-  loading: () => <div className="h-[500px] bg-black/50 flex items-center justify-center border border-[#00ffd0]/20 text-[#00ffd0] animate-pulse">INITIATING GIS UPLINK...</div> 
+  loading: () => <div className="h-[600px] bg-black/50 flex items-center justify-center border border-[#00ffd0]/20 text-[#00ffd0] animate-pulse">INITIATING GIS UPLINK...</div> 
 });
 
 export default function AdminDashboard() {
@@ -21,7 +21,7 @@ export default function AdminDashboard() {
   const [scanLng, setScanLng] = useState("79.08");
   const [lastScannedLocation, setLastScannedLocation] = useState<{lat: number, lng: number} | null>(null);
 
-  // NEW: Drone Route State
+  // Drone Route State
   const [activeRoute, setActiveRoute] = useState<[number, number][] | null>(null);
 
   const fetchSignals = async () => {
@@ -205,14 +205,16 @@ export default function AdminDashboard() {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         {/* LEFT: TACTICAL MAP */}
-        <div className="lg:col-span-7">
+        <div className="lg:col-span-7 flex flex-col">
           <div className="flex justify-between items-end mb-3">
             <h3 className="text-xs font-bold tracking-[0.3em] flex items-center gap-2">
               <Crosshair className="w-4 h-4" /> BATTLESPACE_VISUALIZATION
             </h3>
             <span className="text-[10px] text-gray-500">GIS_VER: 4.2.0-STABLE</span>
           </div>
-          <div className="relative border border-[#00ffd0]/30 shadow-[0_0_30px_rgba(0,255,208,0.1)]">
+          
+          {/* FIX: ADDED h-[600px] w-full and rounded-xl to force the Map to render! */}
+          <div className="relative h-[600px] w-full border border-[#00ffd0]/30 shadow-[0_0_30px_rgba(0,255,208,0.1)] rounded-xl overflow-hidden">
             <LiveMap 
               signals={signals} 
               onMapClick={handleMapClick}
